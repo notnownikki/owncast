@@ -3,9 +3,12 @@ package storageproviders
 import (
 	"bufio"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 
+	"github.com/grafov/m3u8"
+	"github.com/owncast/owncast/config"
 	"github.com/owncast/owncast/core/data"
 	"github.com/owncast/owncast/core/playlist"
 	"github.com/owncast/owncast/utils"
@@ -15,11 +18,12 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
-
-	"github.com/owncast/owncast/config"
-
-	"github.com/grafov/m3u8"
 )
+
+// can use rewriteRemotePlaylist to make the URLs absolute,
+// but shouldn't do this for the master playlist because that needs to be relative to get to the varient playlists
+// rewrite the varient playlists
+// do not upload the playlists to s3
 
 // If we try to upload a playlist but it is not yet on disk
 // then keep a reference to it here.
@@ -87,17 +91,23 @@ func (s *S3Storage) SegmentWritten(localFilePath string) {
 		}
 	}
 
+	playlistPath := filepath.Join(filepath.Dir(localFilePath), "stream.m3u8")
+	// NIKKI: rewrite the variant playlist to have absolute urls
+	if err := s.rewriteRemotePlaylist(playlistPath); err != nil {
+		log.Warnln(err)
+	}
+
 	// Upload the variant playlist for this segment
 	// so the segments and the HLS playlist referencing
 	// them are in sync.
-	playlistPath := filepath.Join(filepath.Dir(localFilePath), "stream.m3u8")
-	if _, err := s.Save(playlistPath, 0); err != nil {
+	// playlistPath := filepath.Join(filepath.Dir(localFilePath), "stream.m3u8")
+	/*if _, err := s.Save(playlistPath, 0); err != nil {
 		_queuedPlaylistUpdates[playlistPath] = playlistPath
 		if pErr, ok := err.(*os.PathError); ok {
 			log.Debugln(pErr.Path, "does not yet exist locally when trying to upload to S3 storage.")
 			return
 		}
-	}
+	}*/
 }
 
 // VariantPlaylistWritten is called when a variant hls playlist is written.
@@ -105,21 +115,34 @@ func (s *S3Storage) VariantPlaylistWritten(localFilePath string) {
 	// We are uploading the variant playlist after uploading the segment
 	// to make sure we're not referring to files in a playlist that don't
 	// yet exist.  See SegmentWritten.
-	if _, ok := _queuedPlaylistUpdates[localFilePath]; ok {
+
+	// NIKKI: rewrite the variant playlist to have full urls, do NOT save it to s3
+	//if err := s.rewriteRemotePlaylist(localFilePath); err != nil {
+	//	log.Warnln(err)
+	//}
+
+	/*if _, ok := _queuedPlaylistUpdates[localFilePath]; ok {
 		if _, err := s.Save(localFilePath, 0); err != nil {
 			log.Errorln(err)
 			_queuedPlaylistUpdates[localFilePath] = localFilePath
 		}
 		delete(_queuedPlaylistUpdates, localFilePath)
-	}
+	}*/
 }
 
 // MasterPlaylistWritten is called when the master hls playlist is written.
 func (s *S3Storage) MasterPlaylistWritten(localFilePath string) {
 	// Rewrite the playlist to use absolute remote S3 URLs
-	if err := s.rewriteRemotePlaylist(localFilePath); err != nil {
-		log.Warnln(err)
+	// NIKKI: copy the playlist into the public path
+	//if err := s.rewriteRemotePlaylist(localFilePath); err != nil {
+	//	log.Warnln(err)
+	//}
+	publicPath := filepath.Join(config.PublicHLSStoragePath, filepath.Base(localFilePath))
+	data, err := ioutil.ReadFile(localFilePath)
+	if err != nil {
+		panic(err)
 	}
+	_ = ioutil.WriteFile(publicPath, data, 0644)
 }
 
 // Save saves the file to the s3 bucket.
@@ -189,19 +212,18 @@ func (s *S3Storage) rewriteRemotePlaylist(filePath string) error {
 	if err != nil {
 		panic(err)
 	}
-
-	p := m3u8.NewMasterPlaylist()
-	if err := p.DecodeFrom(bufio.NewReader(f), false); err != nil {
-		log.Warnln(err)
+	p, _, err := m3u8.DecodeFrom(bufio.NewReader(f), true)
+	if err != nil {
+		log.Fatalln(err)
 	}
-
-	for _, item := range p.Variants {
-		item.URI = s.host + filepath.Join("/hls", item.URI)
+	variantPlaylist := p.(*m3u8.MediaPlaylist)
+	streamTrack := filepath.Base(filepath.Dir(filePath))
+	for _, item := range variantPlaylist.Segments {
+		if item != nil {
+			item.URI = s.host + filepath.Join("/hls", streamTrack, item.URI)
+		}
 	}
-
-	publicPath := filepath.Join(config.PublicHLSStoragePath, filepath.Base(filePath))
-
-	newPlaylist := p.String()
-
+	publicPath := filepath.Join(config.PublicHLSStoragePath, streamTrack, filepath.Base(filePath))
+	newPlaylist := variantPlaylist.String()
 	return playlist.WritePlaylist(newPlaylist, publicPath)
 }
