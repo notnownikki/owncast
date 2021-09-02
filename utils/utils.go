@@ -56,7 +56,7 @@ func Copy(source, destination string) error {
 		return err
 	}
 
-	return ioutil.WriteFile(destination, input, 0600)
+	return ioutil.WriteFile(destination, input, 0644)
 }
 
 // Move moves the file to destination.
