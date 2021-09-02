@@ -11,7 +11,6 @@ import (
 	"github.com/owncast/owncast/config"
 	"github.com/owncast/owncast/core/data"
 	"github.com/owncast/owncast/core/playlist"
-	"github.com/owncast/owncast/utils"
 	log "github.com/sirupsen/logrus"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -73,23 +72,7 @@ func (s *S3Storage) Setup() error {
 
 // SegmentWritten is called when a single segment of video is written.
 func (s *S3Storage) SegmentWritten(localFilePath string) {
-	index := utils.GetIndexFromFilePath(localFilePath)
-	performanceMonitorKey := "s3upload-" + index
-	utils.StartPerformanceMonitor(performanceMonitorKey)
-
-	// Upload the segment
-	if _, err := s.Save(localFilePath, 0); err != nil {
-		log.Errorln(err)
-		return
-	}
-	averagePerformance := utils.GetAveragePerformance(performanceMonitorKey)
-
-	// Warn the user about long-running save operations
-	if averagePerformance != 0 {
-		if averagePerformance > float64(data.GetStreamLatencyLevel().SecondsPerSegment)*0.9 {
-			log.Warnln("Possible slow uploads: average upload S3 save duration", averagePerformance, "s. troubleshoot this issue by visiting https://owncast.online/docs/troubleshooting/")
-		}
-	}
+	//	index := utils.GetIndexFromFilePath(localFilePath)
 
 	playlistPath := filepath.Join(filepath.Dir(localFilePath), "stream.m3u8")
 	// NIKKI: rewrite the variant playlist to have absolute urls
